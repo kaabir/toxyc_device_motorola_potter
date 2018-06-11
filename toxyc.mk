@@ -1,4 +1,3 @@
-#
 # Copyright (C) 2016 The CyanogenMod Project
 # Copyright (C) 2017 The LineageOS Project
 #
@@ -14,21 +13,28 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+
 # Inherit from those products. Most specific first.
 $(call inherit-product, device/motorola/potter/full_potter.mk)
 
-# Inherit some common PixelExperience stuff.
-TARGET_BOOT_ANIMATION_RES := 1080
-TARGET_GAPPS_ARCH := arm64
-$(call inherit-product, vendor/aosp/config/common_full_phone.mk)
+# Inherit some common GZOSP stuff.
+$(call inherit-product, vendor/toxyc/config/common_full_phone.mk)
+$(call inherit-product, vendor/toxyc/config/caf_fw.mk)
+
+# Boot animation
+TARGET_SCREEN_WIDTH := 1080
+TARGET_SCREEN_HEIGHT := 1920
 
 ## Device identifier. This must come after all inclusions
 PRODUCT_DEVICE := potter
-PRODUCT_NAME := aosp_potter
+PRODUCT_NAME := toxyc_potter
 PRODUCT_BRAND := motorola
 PRODUCT_MANUFACTURER := motorola
+
+TOXYC_BUILD_TYPE=OFFICIAL
 
 PRODUCT_SYSTEM_PROPERTY_BLACKLIST := ro.product.model
 
 PRODUCT_BUILD_PROP_OVERRIDES += \
-    PRODUCT_NAME="Moto G5 Plus"
+    PRODUCT_NAME="Moto G5 Plus" 
+

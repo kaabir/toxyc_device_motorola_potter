@@ -59,6 +59,7 @@ import android.view.InputDevice;
 import android.view.KeyCharacterMap;
 import android.view.KeyEvent;
 import android.view.ViewConfiguration;
+import android.widget.Toast;
 
 import com.android.internal.os.DeviceKeyHandler;
 import com.android.internal.util.ArrayUtils;
@@ -68,8 +69,6 @@ import com.moto.actions.util.FileUtils;
 import java.util.List;
 
 import static com.moto.actions.actions.Constants.*;
-
-import com.moto.actions.utils.ProximityUtils;
 
 public class KeyHandler implements DeviceKeyHandler {
 
@@ -101,6 +100,7 @@ public class KeyHandler implements DeviceKeyHandler {
     private Sensor mProximitySensor;
     private Vibrator mVibrator;
     private int mProximityTimeOut;
+    private boolean mProximityWakeSupported;
     private ISearchManager mSearchManagerService;
     private Handler mHandler;
     private int fpTapCounts = 0;
@@ -148,10 +148,13 @@ public class KeyHandler implements DeviceKeyHandler {
         mGestureWakeLock = mPowerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK,
                 "GestureWakeLock");
 
-        mProximityTimeOut = mContext.getResources().getInteger(
+        final Resources resources = mContext.getResources();
+        mProximityTimeOut = resources.getInteger(
                 com.android.internal.R.integer.config_proximityCheckTimeout);
+        mProximityWakeSupported = resources.getBoolean(
+                com.android.internal.R.bool.config_proximityCheckOnWake);
 
-        if (ProximityUtils.isProximityWakeEnabled(mContext)) {
+        if (mProximityWakeSupported) {
             mSensorManager = (SensorManager) context.getSystemService(Context.SENSOR_SERVICE);
             mProximitySensor = mSensorManager.getDefaultSensor(Sensor.TYPE_PROXIMITY);
             mProximityWakeLock = mPowerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK,
@@ -441,11 +444,11 @@ public class KeyHandler implements DeviceKeyHandler {
     }
 
     private boolean isProximityEnabledOnScreenOffGesturesFP() {
-        return ProximityUtils.isProximityWakeEnabled(mContext) && !FileUtils.readOneLine(getFPNodeBasedOnScreenState(FP_PROXIMITY_CHECK_SCREENOFF_NODE)).equals("0");
+        return !FileUtils.readOneLine(getFPNodeBasedOnScreenState(FP_PROXIMITY_CHECK_SCREENOFF_NODE)).equals("0");
     }
 
     private boolean isProximityEnabledOnScreenOffGestures() {
-        return ProximityUtils.isProximityWakeEnabled(mContext) && Settings.System.getInt(mContext.getContentResolver(), KEY_GESTURE_ENABLE_PROXIMITY_SENSOR, 1) != 0;
+        return Settings.System.getInt(mContext.getContentResolver(), KEY_GESTURE_ENABLE_PROXIMITY_SENSOR, 1) != 0;
     }
 
     private String getFPNodeBasedOnScreenState(String node) {
@@ -469,7 +472,7 @@ public class KeyHandler implements DeviceKeyHandler {
         return node;
     }
 
-    public KeyEvent handleKeyEvent(KeyEvent event) {
+    public boolean handleKeyEvent(KeyEvent event) {
         int scanCode = event.getScanCode();
 
         if (DEBUG) {
@@ -484,7 +487,7 @@ public class KeyHandler implements DeviceKeyHandler {
         boolean isFPScanCode = ArrayUtils.contains(sSupportedFPGestures, scanCode);
         boolean isScreenOffGesturesScanCode = ArrayUtils.contains(sSupportedScreenOffGestures, scanCode);
         if (!isFPScanCode && !isScreenOffGesturesScanCode) {
-            return event;
+            return false;
         }
 
         boolean isFPGestureEnabled = FileUtils.readOneLine(FP_HOME_NODE).equals("1");
@@ -494,12 +497,12 @@ public class KeyHandler implements DeviceKeyHandler {
 
         // We only want ACTION_UP event
         if (event.getAction() != KeyEvent.ACTION_UP) {
-            return null;
+            return true;
         }
-
+        
         if (isFPScanCode){
             if (fpGesturePending) {
-                return event;
+                return false;
             } else {
                 resetFPGestureDelay();
                 fpGesturePending = true;
@@ -514,7 +517,7 @@ public class KeyHandler implements DeviceKeyHandler {
         if (isFPScanCode) {
             if ((!isFPGestureEnabled) || (!isScreenOn && !isFPGestureEnabledOnScreenOff)) {
                 resetDoubleTapOnFP();
-                return event;
+                return false;
             }
             if (!isScreenOn && isFPGestureEnabledOnScreenOff) {
                 processFPScreenOffScancode(scanCode);
@@ -524,7 +527,7 @@ public class KeyHandler implements DeviceKeyHandler {
         } else if (isScreenOffGesturesScanCode) {
             handleScreenOffScancode(scanCode);
         }
-        return null;
+        return true;
     }
 
     private void processFPScancode(int scanCode) {
@@ -623,6 +626,11 @@ public class KeyHandler implements DeviceKeyHandler {
             case ACTION_SCREENSHOT:
                 triggerVirtualKeypress(mHandler, KeyEvent.KEYCODE_SYSRQ);
                 break;
+            case ACTION_PIP:
+                if (!mKeyguardManager.inKeyguardRestrictedInputMode()) {
+                    goToPipMode();
+                }
+                break;
             case ACTION_LAST_APP:
                 if (!mKeyguardManager.inKeyguardRestrictedInputMode()) {
                     switchToLastApp(mContext);
@@ -636,6 +644,26 @@ public class KeyHandler implements DeviceKeyHandler {
             return;
         }
         mVibrator.vibrate(intensity);
+    }
+
+    private void goToPipMode() {
+        ActivityInfo ai = getRunningActivityInfo(mContext);
+        if (ai != null && !ai.supportsPictureInPicture()) {
+            try {
+                PackageManager pm = mContext.getPackageManager();
+                Resources resources = pm.getResourcesForApplication("com.moto.actions");
+                int resId = resources.getIdentifier("app_does_not_support_pip", "string", "com.moto.actions");
+                final String text = resources.getString(resId);
+                mHandler.post(new Runnable() {
+                    public void run() {
+                        Toast.makeText(mContext, text, Toast.LENGTH_SHORT).show();
+                    }
+                });
+            } catch (Exception e) {
+            }
+            return;
+        }
+        triggerVirtualKeypress(mHandler, 171);
     }
 
     private void toggleScreenState() {
@@ -698,8 +726,16 @@ public class KeyHandler implements DeviceKeyHandler {
         if (isProximityEnabledOnScreenOffGesturesFP() && !mFPScreenOffGesturesHandler.hasMessages(FP_ACTION_REQUEST)) {
             Message msg = mFPScreenOffGesturesHandler.obtainMessage(FP_ACTION_REQUEST);
             msg.arg1 = scanCode;
-            mFPScreenOffGesturesHandler.sendMessageDelayed(msg, mProximityTimeOut);
-            registerFPScreenOffListener(scanCode);
+            boolean defaultProximity = mContext.getResources().getBoolean(
+                    com.android.internal.R.bool.config_proximityCheckOnWakeEnabledByDefault);
+            boolean proximityWakeCheckEnabled = Settings.System.getInt(mContext.getContentResolver(),
+                    Settings.System.PROXIMITY_ON_WAKE, defaultProximity ? 1 : 0) == 1;
+            if (mProximityWakeSupported && proximityWakeCheckEnabled && mProximitySensor != null) {
+                mFPScreenOffGesturesHandler.sendMessageDelayed(msg, mProximityTimeOut);
+                registerFPScreenOffListener(scanCode);
+            } else {
+                mFPScreenOffGesturesHandler.sendMessage(msg);
+            }
         }else{
             processFPScancode(scanCode);
         }
@@ -753,8 +789,16 @@ public class KeyHandler implements DeviceKeyHandler {
         if (isProximityEnabledOnScreenOffGestures() && !mScreenOffGesturesHandler.hasMessages(GESTURE_REQUEST)) {
             Message msg = mScreenOffGesturesHandler.obtainMessage(GESTURE_REQUEST);
             msg.arg1 = scanCode;
-            mScreenOffGesturesHandler.sendMessageDelayed(msg, mProximityTimeOut);
-            registerScreenOffGesturesListener(scanCode);
+            boolean defaultProximity = mContext.getResources().getBoolean(
+                    com.android.internal.R.bool.config_proximityCheckOnWakeEnabledByDefault);
+            boolean proximityWakeCheckEnabled = Settings.System.getInt(mContext.getContentResolver(),
+                    Settings.System.PROXIMITY_ON_WAKE, defaultProximity ? 1 : 0) == 1;
+            if (mProximityWakeSupported && proximityWakeCheckEnabled && mProximitySensor != null) {
+                mScreenOffGesturesHandler.sendMessageDelayed(msg, mProximityTimeOut);
+                registerScreenOffGesturesListener(scanCode);
+            } else {
+                mScreenOffGesturesHandler.sendMessage(msg);
+            }
         }else{
             processScreenOffScancode(scanCode);
         }
